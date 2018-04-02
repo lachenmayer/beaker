@@ -2,6 +2,8 @@ import crypto from 'crypto'
 import emitStream from 'emit-stream'
 import EventEmitter from 'events'
 import datEncoding from 'dat-encoding'
+import jetpack from 'fs-jetpack'
+import path from 'path'
 import pify from 'pify'
 import pda from 'pauls-dat-api'
 import signatures from 'sodium-signatures'
@@ -20,6 +22,8 @@ import * as datGC from './garbage-collector'
 import {addArchiveSwarmLogging} from './logging-utils'
 import hypercoreProtocol from 'hypercore-protocol'
 import hyperdrive from 'hyperdrive'
+import randomAccessFile from 'random-access-file'
+var randomAccessKeychain = process.platform === 'darwin' ? require('random-access-keychain') : null
 
 // network modules
 import swarmDefaults from 'datland-swarm-defaults'
@@ -289,8 +293,25 @@ async function loadArchiveInner (key, secretKey, userSettings = null) {
   var metaPath = archivesDb.getArchiveMetaPath(key)
   mkdirp.sync(metaPath)
 
+  // on macOS, we store the secret key in the keychain.
+  // if the secret_key file already exists in the meta path, we use that instead for backwards compatibility.
+  var secretKeyFileExists = await jetpack.existsAsync(path.join(metaPath, 'metadata', 'secret_key')) === 'file'
+
+  // create the archive storage instance
+  var storage = {
+    metadata: function (file) {
+      if (randomAccessKeychain != null && file === 'secret_key' && !secretKeyFileExists) {
+        return randomAccessKeychain('Beaker Browser site secret', key.toString('hex'))
+      }
+      return randomAccessFile(path.join(metaPath, 'metadata', file))
+    },
+    content: function (file) {
+      return randomAccessFile(path.join(metaPath, 'content', file))
+    }
+  }
+
   // create the archive instance
-  var archive = hyperdrive(metaPath, key, {
+  var archive = hyperdrive(storage, key, {
     sparse: true,
     secretKey,
     metadataStorageCacheSize: 0,
